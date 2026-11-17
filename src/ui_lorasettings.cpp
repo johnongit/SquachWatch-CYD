@@ -10,6 +10,7 @@
 #include "lora_profiles.h"
 #include "lora_myname.h"
 #include "lora_channels.h"
+#include "lora_meshcore.h"
 #include "settings.h"
 #include "theme.h"
 #include "squachy.h"
@@ -29,14 +30,14 @@ const int PILL_R = 310;                       // the value pills' right edge
 enum Id : uint8_t {
     NONE = 0,
     // the main list
-    LISTEN, PRESET, TX, HOPS, REGION, CHANNELS,
+    LISTEN, PRESET, TX, HOPS, REGION, CHANNELS, MC_HASH,
     NAME, SHORTNAME, ANNOUNCE,
     MSGSOUND,
     DETECT, ONSCREEN,
     LOOKUPS, LK_CALL, LK_OGN, LK_FEED,
     CLEARCHATS, FORGETNAMES,
     // the CHANNELS list
-    ADD_MT, ADD_MC,
+    ADD_MT, ADD_MC, SCOPE_DEFAULT, SCOPE_CHANNEL,
     CHAN_ROW,            // + the channelRow number in `arg`
 };
 
@@ -54,7 +55,7 @@ struct Row {
     // a section's hint is drawn at its right end ("SENDS ON LongFast").
     bool     sendMark;
 };
-const uint8_t MAX_ROWS = 64;
+const uint8_t MAX_ROWS = 100;
 Row      s_rows[MAX_ROWS];
 uint8_t  s_rowN = 0;
 int16_t  s_rowY[MAX_ROWS];                    // where each was drawn, scroll applied
@@ -65,7 +66,8 @@ int      s_scroll[2] = { 0, 0 };
 int      s_contentH = 0;
 
 // The edit line.
-enum class Edit : uint8_t { NONE, NAME, SHORTNAME, CH_NAME, CH_KEY };
+enum class Edit : uint8_t { NONE, NAME, SHORTNAME, CH_NAME, CH_KEY, SCOPE };
+uint8_t s_scopeChannel = 255;
 Edit     s_edit = Edit::NONE;
 char     s_buf[81] = { 0 };
 uint8_t  s_bufN = 0;
@@ -182,6 +184,22 @@ void buildMain() {
         r.valCol = Theme::PURPLE;
     }
 
+    section("MESHCORE ROUTING");
+    {
+        Row& r = add(MC_HASH, "PATH HASH SIZE");
+        const uint8_t n = Settings::loraMcHashBytes();
+        snprintf(r.value, sizeof r.value, "%u BYTE%s", n, n == 1 ? "" : "S");
+        r.valCol = Theme::PINK;
+        snprintf(r.hint, sizeof r.hint, "TAP: 1 / 2 / 3. APPLIES TO NEXT TX");
+    }
+    section("MESHCORE FLOOD SCOPE");
+    {
+        Row& r = add(SCOPE_DEFAULT, "DEFAULT SCOPE");
+        r.editable = true;
+        snprintf(r.value, sizeof r.value, "%s", MeshCore::defaultScope()[0] ? MeshCore::defaultScope() : "UNSCOPED");
+        r.valCol = Theme::PINK;
+        snprintf(r.hint, sizeof r.hint, "#NAME; EMPTY OR * = UNSCOPED");
+    }
     section("NAME");
     {
         Row& r = add(NAME, "NAME");
@@ -320,6 +338,13 @@ void buildChannels() {
                 r.valCol = cf ? Theme::RED : Theme::PINK;
                 snprintf(r.hint, sizeof r.hint, "%s%s  %lu FR", key, c.enabled ? "" : " MUTED", (unsigned long)c.frames);
             }
+            if (want == Lora::Proto::MESHCORE && s_rowN < MAX_ROWS - 1) {
+                Row& sr = add(SCOPE_CHANNEL, "  FLOOD SCOPE", ri);
+                const auto mc = MeshCore::channel(ri);
+                sr.editable = true; sr.valCol = Theme::PINK;
+                snprintf(sr.value, sizeof sr.value, "%s", mc.scope[0] ? mc.scope : "DEFAULT");
+                snprintf(sr.hint, sizeof sr.hint, "#NAME; *=UNSCOPED; EMPTY=DEFAULT");
+            }
         }
     }
 }
@@ -344,6 +369,7 @@ void clampScroll() {
 // Which row the edit line is on.
 bool editOn(const Row& r) {
     switch (s_edit) {
+        case Edit::SCOPE: return s_scopeChannel == 255 ? r.id == SCOPE_DEFAULT : r.id == SCOPE_CHANNEL && r.arg == s_scopeChannel;
         case Edit::NAME:      return r.id == NAME;
         case Edit::SHORTNAME: return r.id == SHORTNAME;
         case Edit::CH_NAME:
@@ -479,6 +505,7 @@ void cancelEdit() { s_edit = Edit::NONE; s_bufN = 0; s_buf[0] = '\0'; }
 
 uint8_t editMax() {
     switch (s_edit) {
+        case Edit::SCOPE: return 30;
         case Edit::NAME:      return (uint8_t)Lora::MyName::NAME_LEN;
         case Edit::SHORTNAME: return (uint8_t)Lora::MyName::SHORT_LEN;
         case Edit::CH_NAME:   return 23;
@@ -488,6 +515,14 @@ uint8_t editMax() {
 
 void commitEdit() {
     switch (s_edit) {
+        case Edit::SCOPE: {
+            const bool ok = s_scopeChannel == 255 ? MeshCore::setDefaultScope(s_buf) : MeshCore::setChannelScope(s_scopeChannel, s_buf);
+            if (!ok) { status("USE #NAME, * OR EMPTY (MAX 30)"); break; }
+            if (!Lora::Chan::save()) { status("SAVE FAILED. RETRY ENTER"); break; }
+            status("SCOPE SAVED");
+            cancelEdit();
+            break;
+        }
         case Edit::NAME:
             Settings::setLoraName(s_buf);
             Lora::identityChanged();
@@ -534,6 +569,10 @@ void tapRow(const Row& r) {
     const bool sameConfirm = confirming(r.id, r.arg);
     if (!sameConfirm) s_confirm = NONE;
     switch (r.id) {
+        case SCOPE_DEFAULT:
+            s_scopeChannel = 255; startEdit(Edit::SCOPE, MeshCore::defaultScope()); break;
+        case SCOPE_CHANNEL:
+            s_scopeChannel = r.arg; startEdit(Edit::SCOPE, MeshCore::channel(r.arg).scope); break;
         case LISTEN:
             Settings::cycleLoraListen();
             Lora::applyListen(Settings::loraListen());
@@ -541,6 +580,7 @@ void tapRow(const Row& r) {
         case PRESET:   uiLoraSettingsNextPreset(); break;
         case TX:       Settings::cycleLoraTx(); break;
         case HOPS:     Settings::cycleLoraHops(); break;
+        case MC_HASH:  Settings::cycleLoraMcHashBytes(); break;
         case REGION: {
             const uint8_t g = Settings::loraRegion();
             Settings::setLoraRegion(g == 0 ? 2 : g == 2 ? 1 : g == 1 ? 3 : 0);   // AUTO -> US -> EU -> AU -> AUTO

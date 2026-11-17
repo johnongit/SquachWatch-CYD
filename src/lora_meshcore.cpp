@@ -12,6 +12,50 @@ namespace MeshCore {
 
 using namespace LoraCrypto;
 
+static char s_defaultScope[31] = {};
+static char s_publicScope[31] = {};
+const char* defaultScope() { return s_defaultScope; }
+static bool validScope(const char* s) {
+    if (!s || !*s || !strcmp(s, "*")) return true;
+    if (s[0] != '#' || !s[1] || strlen(s) > 30) return false;
+    for (const char* p = s; *p; ++p) if ((unsigned char)*p <= 32 || (unsigned char)*p > 126) return false;
+    return true;
+}
+bool setDefaultScope(const char* name) {
+    if (!validScope(name)) return false;
+    snprintf(s_defaultScope, sizeof s_defaultScope, "%s", name ? name : "");
+    return true;
+}
+uint16_t scopeFlood(uint8_t* f, uint16_t len, size_t cap, const char* scope) {
+    if (!f || len < 2 || len > 255 || len > cap || !validScope(scope)) return 0;
+    if (!scope || !*scope || !strcmp(scope, "*")) return len;
+    if ((f[0] & 3) != ROUTE_FLOOD) return len;
+    Frame parsed;
+    if (!parse(f, (uint8_t)len, parsed) || len + 4u > cap || len + 4u > 255) return 0;
+    uint8_t key[32], input[256], mac[32];
+    sha256((const uint8_t*)scope, strlen(scope), key);
+    input[0] = parsed.type;
+    memcpy(input + 1, parsed.payload, parsed.payloadLen);
+    hmacSha256(key, 16, input, 1u + parsed.payloadLen, mac);
+    uint16_t code = rd16le(mac);
+    if (code == 0) ++code;
+    else if (code == 0xffff) --code;
+    memmove(f + 5, f + 1, len - 1);
+    f[0] &= ~3u;
+    f[1] = (uint8_t)code; f[2] = (uint8_t)(code >> 8);
+    f[3] = f[4] = 0;
+    return len + 4;
+}
+
+bool setFloodHashSize(uint8_t* frame, uint16_t len, uint8_t bytes) {
+    if (!frame || bytes < 1 || bytes > 3 || len > 255) return false;
+    Frame f;
+    if (!parse(frame, (uint8_t)len, f) || f.hops ||
+        (f.route != ROUTE_FLOOD && f.route != ROUTE_TRANSPORT_FLOOD)) return false;
+    frame[f.hasTransport ? 5 : 1] = (uint8_t)((bytes - 1) << 6);
+    return true;
+}
+
 const char* typeName(uint8_t t) {
     switch (t) {
         case TYPE_REQ: return "REQ";           case TYPE_RESPONSE: return "RESPONSE";
@@ -60,7 +104,7 @@ bool parse(const uint8_t* d, uint8_t len, Frame& f) {
     const uint8_t pl = d[off++];
     f.hashSize = (uint8_t)((pl >> 6) + 1);
     f.hops     = pl & 0x3F;
-    if (f.hashSize > 2) return false;                 // three is reserved
+    if (f.hashSize > 3) return false;                 // four is reserved
     const size_t pathBytes = (size_t)f.hops * f.hashSize;
     if (pathBytes > 64 || off + pathBytes > len) return false;
     f.path = d + off;
@@ -130,6 +174,13 @@ static uint8_t s_nUser = 0;
 static uint32_t s_frames[1 + MAX_USER];
 static uint32_t s_lastMs[1 + MAX_USER];
 
+bool setChannelScope(uint8_t i, const char* name) {
+    if (i >= channelCount() || !validScope(name)) return false;
+    char* dest = i ? s_user[i - 1].scope : s_publicScope;
+    snprintf(dest, 31, "%s", name ? name : "");
+    return true;
+}
+
 uint8_t channelCount() { return (uint8_t)(1 + s_nUser); }
 uint8_t userChannelCount() { return s_nUser; }
 uint8_t maxUserChannels() { return MAX_USER; }
@@ -151,6 +202,7 @@ Channel channel(uint8_t i) {
         memcpy(c.key, PUBLIC_KEY, 16);
         c.hash = 0x11;
         c.derived = false;      // a published constant, not a derivation
+        snprintf(c.scope, sizeof c.scope, "%s", s_publicScope);
         c.enabled = true;       // built in, and never switched off
         return c;
     }
@@ -357,7 +409,7 @@ uint16_t buildPathReturn(const uint8_t secret[32], uint8_t destHash, uint8_t our
     if (!f || !ack) return 0;
     const uint8_t hs = (uint8_t)((pathLenByte >> 6) + 1), hc = (uint8_t)(pathLenByte & 63);
     const uint16_t pathBytes = (uint16_t)(hs * hc);
-    if (pathBytes + 1 + 1 + 6 > 160) return 0;
+    if (hs > 3 || pathBytes > 64 || (pathBytes && !path) || pathBytes + 1 + 1 + 6 > 160) return 0;
     uint8_t plain[176];
     uint16_t n = 0;
     plain[n++] = pathLenByte;
@@ -501,9 +553,10 @@ bool decode(const Lora::Packet& pk, Decoded& out) {
 
 static size_t pathText(const Frame& f, char* out, size_t cap) {
     size_t o = 0;
-    for (uint8_t i = 0; i < f.hops && o + 6 < cap; i++) {
-        if (f.hashSize == 2) o += (size_t)snprintf(out + o, cap - o, "%s%02x%02x", i ? "," : "", f.path[2*i], f.path[2*i+1]);
-        else                 o += (size_t)snprintf(out + o, cap - o, "%s%02x", i ? "," : "", f.path[i]);
+    for (uint8_t i = 0; i < f.hops && o + 1 + 2 * f.hashSize < cap; i++) {
+        if (i) out[o++] = ',';
+        for (uint8_t j = 0; j < f.hashSize; ++j)
+            o += (size_t)snprintf(out + o, cap - o, "%02x", f.path[i * f.hashSize + j]);
     }
     if (!o && cap) out[0] = '\0';
     return o;

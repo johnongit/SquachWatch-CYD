@@ -43,7 +43,8 @@ namespace Chan {
 // key bytes) and 6 Meshtastic ones of at most 59 (the same, with a key-length
 // byte and 32 key bytes) -- 1363. Rounded up so a table that grows by a few
 // entries does not silently start dropping the tail.
-static const size_t BLOB_MAX = 1536;
+// Also holds up to 25 channel scope records (57 bytes each), plus default.
+static const size_t BLOB_MAX = 3072;
 
 // Both tables' user channels into out; returns the bytes written, which is 1
 // (the format byte alone) when there is nothing to keep. Stops cleanly at cap

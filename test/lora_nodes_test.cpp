@@ -312,5 +312,20 @@ int main() {
         Msgs::clear();
     }
 
+    suite("Multi-byte MeshCore classification and relay attribution");
+    for (uint8_t width = 1; width <= 3; ++width) {
+        Nodes::clear();
+        mcAdvert(0x40, 0, nullptr, -63); Nodes::note(pk, 1000, 0);
+        // A relayed ACK whose last path hash matches this advertised key.
+        pk.data[0] = 0x0d; pk.data[1] = (uint8_t)(((width - 1) << 6) | 1);
+        for (uint8_t j = 0; j < width; ++j) pk.data[2 + j] = 0x40 + j;
+        memset(pk.data + 2 + width, 0xaa, 4); pk.len = 6 + width;
+        pk.proto = Proto::UNKNOWN; classify(pk);
+        ck("one/two/three-byte route classified as MeshCore", pk.proto == Proto::MESHCORE);
+        Nodes::note(pk, 2000, 0);
+        ck("known relay matched by complete prefix", Nodes::count() == 1 && Nodes::at(0)->packets == 2);
+        pk.data[2] = 0x99; Nodes::note(pk, 3000, 0);
+        ck("unknown relay classified as repeater", Nodes::count() == 2 && Nodes::at(1)->role == MeshCore::NODE_REPEATER);
+    }
     return report();
 }

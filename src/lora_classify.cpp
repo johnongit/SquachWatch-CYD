@@ -50,7 +50,7 @@ static bool looksMeshCore(const Packet& pk) {
     const uint8_t pl = pk.data[off];
     const uint8_t hashSize = (pl >> 6) + 1;
     const size_t pathBytes = (size_t)(pl & 0x3F) * hashSize;
-    if (hashSize > 2 || pathBytes > 64) return false;
+    if (hashSize > 3 || pathBytes > 64) return false;
     return off + 1 + pathBytes < pk.len;
 }
 

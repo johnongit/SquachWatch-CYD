@@ -219,16 +219,18 @@ static void noteMeshCore(const Packet& pk, uint32_t now, uint32_t epoch) {
         }
         return;
     }
-    if (f.hops && f.hashSize == 1 && flood) {
+    if (f.hops && flood) {
         // The newest path byte is the repeater that just sent this copy.
-        const uint8_t h = f.path[f.hops - 1];
+        uint32_t h = 0;
+        for (uint8_t j = 0; j < f.hashSize; ++j) h = (h << 8) | f.path[(f.hops - 1) * f.hashSize + j];
         // Match it to an advertised key when one is known; else its own row.
         Node* n = nullptr;
         for (uint8_t i = 0; i < s_n; i++)
-            if (s_nodes[i].proto == Proto::MESHCORE && (uint8_t)(s_nodes[i].id >> 56) == h && s_nodes[i].name[0]) { n = &s_nodes[i]; break; }
+            if (s_nodes[i].proto == Proto::MESHCORE && (s_nodes[i].id >> (64 - 8 * f.hashSize)) == h && s_nodes[i].name[0]) { n = &s_nodes[i]; break; }
         if (!n) {
-            n = get(Proto::MESHCORE, 0x0100000000000000ull | h, now);
-            if (!n->tag[0]) snprintf(n->tag, sizeof n->tag, "rpt %02x", h);
+            n = get(Proto::MESHCORE, (uint64_t(f.hashSize) << 56) | h, now);
+            n->role = MeshCore::NODE_REPEATER;
+            if (!n->tag[0]) snprintf(n->tag, sizeof n->tag, "rpt %0*x", 2 * f.hashSize, (unsigned)h);
         }
         // This row IS the station whose transmission we just received, so the
         // signal is a measured link to it even though the frame is relayed.
