@@ -109,7 +109,7 @@ void scanlines(TFT_eSPI& t, int x, int y, int w, int h) {
 void drawHeader(TFT_eSPI& t, uint32_t now) {
     char line[40];
     const uint8_t nodes = Lora::nodeCount();
-    snprintf(line, sizeof line, "LORA  %s  %u NODES",
+    snprintf(line, sizeof line, "LORA  %s  %u NODES >",
              Settings::loraListen() == 4 ? "LORAWAN" : Settings::loraListen() == 3 ? "BOTH" : Settings::loraListen() == 2 ? "MESHCORE" : "MESHTASTIC", (unsigned)nodes);
     t.setTextFont(1); t.setTextSize(1);
     const int titleX = (t.width() - t.textWidth(line)) / 2;
@@ -1042,6 +1042,8 @@ LoraHomeHit uiLoraHomeHit(TFT_eSPI& t, int x, int y) {
     // LORA SETTINGS, the icon top-left: a finger's box over it, clear of the
     // LIVE tag and above the dish.
     if (y < 22 && x < 50) return LoraHomeHit::SETTINGS;
+    // The title includes the node count; tap it to browse MeshCore nodes.
+    if (y < 16 && x >= 80 && x < t.width() - 80) return LoraHomeHit::NODES;
     // A dot on the dish: the nearest within reach.
     {
         const int dx0 = x - DISH_CX, dy0 = y - DISH_CY;

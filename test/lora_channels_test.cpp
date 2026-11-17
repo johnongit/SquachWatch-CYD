@@ -561,5 +561,40 @@ int main() {
         C::save();
     }
 
+    suite("Legacy v1 channel stores remain readable");
+    {
+        const uint8_t old[] = {1, 1, 0, 2, '#', 'x'};
+        MeshCore::setDefaultScope("#old");
+        ck("v1 restores channels and resets scopes", Lora::Chan::replay(old, sizeof old) == 1 && MeshCore::findChannel("#x") == 1 && !MeshCore::defaultScope()[0]);
+    }
+    suite("Scopes survive restart, including Public and explicit unscoped");
+    {
+        MeshCore::clearUserChannels();
+        MeshCore::addChannel("#local", nullptr);
+        MeshCore::setDefaultScope("#paris");
+        MeshCore::setChannelScope(0, "*");
+        MeshCore::setChannelScope(1, "#quartier");
+        ck("scope configuration saved", Lora::Chan::save());
+        MeshCore::setDefaultScope(""); MeshCore::setChannelScope(0, "");
+        MeshCore::clearUserChannels();
+        ck("restore counts channels only", Lora::Chan::restore() == 1);
+        ck("default restored", !strcmp(MeshCore::defaultScope(), "#paris"));
+        ck("Public override restored", !strcmp(MeshCore::channel(0).scope, "*"));
+        ck("channel override restored", !strcmp(MeshCore::channel(1).scope, "#quartier"));
+        MeshCore::removeChannel(1);
+        ck("default without user channels persists", Lora::Chan::save() && Lora::Chan::restore() == 0 && !strcmp(MeshCore::defaultScope(), "#paris"));
+        MeshCore::setDefaultScope(""); MeshCore::setChannelScope(0, ""); Lora::Chan::save();
+    }
+    suite("MeshCore path width persists independently of scopes and MT hops");
+    {
+        const uint8_t mtHops = Settings::loraHops();
+        ck("legacy width defaults to one", Settings::loraMcHashBytes() == 1);
+        Settings::cycleLoraMcHashBytes(); Settings::load();
+        ck("two-byte preference survives reload", Settings::loraMcHashBytes() == 2);
+        Settings::cycleLoraMcHashBytes(); Settings::load();
+        ck("three-byte preference survives reload", Settings::loraMcHashBytes() == 3);
+        Settings::cycleLoraMcHashBytes();
+        ck("cycle wraps, MT hops unchanged", Settings::loraMcHashBytes() == 1 && Settings::loraHops() == mtHops);
+    }
     return report();
 }

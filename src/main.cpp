@@ -11440,6 +11440,7 @@ void loop() {
                     if (hit == LoraChatHit::TAB_MESHTASTIC) uiLoraChatSelect(0);
                     else if (hit == LoraChatHit::TAB_MESHCORE) uiLoraChatSelect(1);
                     else if (hit == LoraChatHit::TAB_DMS) uiLoraChatSelect(2);
+                    else if (hit == LoraChatHit::TAB_NODES) uiLoraChatSelect(3);
                     else if (hit == LoraChatHit::CHANNEL) uiLoraChatStepChannel(now);
                     else uiLoraChatTap(gestureStartX, gestureStartY, now);
                 }
@@ -11460,6 +11461,7 @@ void loop() {
                     lastTouch = now;
                     switch (uiLoraHomeHit(*canvas, gestureStartX, gestureStartY)) {
                         case LoraHomeHit::BACK:            enterClear(); break;
+                        case LoraHomeHit::NODES:           uiLoraChatSelect(3); enterLoraChat(); break;
                         case LoraHomeHit::CHATS:           uiLoraChatSelect(uiLoraHomeNet()); enterLoraChat(); break;
                         case LoraHomeHit::CHAT_MESHTASTIC: uiLoraChatSelect(0); enterLoraChat(); break;
                         case LoraHomeHit::CHAT_MESHCORE:   uiLoraChatSelect(1); enterLoraChat(); break;

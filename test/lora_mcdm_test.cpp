@@ -176,6 +176,24 @@ int main() {
            d.f.type == TYPE_ACK && !memcmp(d.ackCrc, ack, 4));
     }
 
+    suite("A scoped DM through three-byte repeaters gets a usable receipt");
+    {
+        uint8_t ack[4], g[256], plain[192], pl = 0;
+        const uint8_t path[] = {0x12,0x34,0x56,0xab,0xcd,0xef};
+        uint16_t n = buildDirectText(bSecret, ourPub, bPub, 1792710200u, 0, "three-byte route", f, ack);
+        g[0] = f[0]; g[1] = 0x82;
+        memcpy(g + 2, path, sizeof path); memcpy(g + 8, f + 2, n - 2);
+        n = scopeFlood(g, n + 6, sizeof g, "#fr-ara");
+        const int before = s_texts;
+        ck("scoped three-byte DM decodes", load(g, n, d) && d.f.hashSize == 3 && d.f.hops == 2);
+        Mc::onFrame(d, 320000);
+        ck("private text delivered to UI", s_texts == before + 1 && !strcmp(s_gotText, "three-byte route"));
+        ck("receipt queued", Mc::next(320000, 1792710201u, "SQUACHY", o) && o.job == Mc::J_PATH);
+        ck("outgoing receipt accepts selected three-byte mode", setFloodHashSize(o.frame, o.len, 3));
+        o.len = scopeFlood(o.frame, o.len, sizeof o.frame, "#fr-ara");
+        PathReturn pr;
+        ck("recipient decrypts ACK with original complete path", load(o.frame, o.len, d) && d.f.hasTransport && d.f.hashSize == 3 && openSecret(bSecret, d.f.payload + 2, d.f.payloadLen - 2, plain, pl) && parsePathReturn(plain, pl, pr) && pr.hashSize == 3 && pr.hops == 2 && !memcmp(pr.path, path, sizeof path) && !memcmp(pr.extra, ack, 4));
+    }
     suite("What is not ours");
     {
         uint8_t xSeed[32], xPub[32], xPrv[64], xSecret[32], ack[4];

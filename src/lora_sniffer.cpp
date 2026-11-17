@@ -979,11 +979,19 @@ static const int8_t EU_MESH_DBM_MAX = 22;
 // The sniffer parked, the preset applied, the frame out, and back to whatever
 // the radio was doing.
 static bool transmitOn(const Profile& prof, const uint8_t* f, uint16_t n, int8_t dbm) {
+    if (!f || !n || n > 255) return false;
     const Mode was = s_mode;
     s_parked = false;
     setMode(Mode::OFF);
     for (int k = 0; k < 400 && !s_parked; k++) vTaskDelay(pdMS_TO_TICKS(10));
     LoraRadio::apply(prof);
+    // LORA HEX shows the exact bytes passed to the radio, including scope
+    // transport codes. Useful when a repeater refuses an emitted flood.
+    if (s_dumpHex) {
+        char hex[511];
+        LoraCrypto::toHex(f, n, hex);
+        Serial.printf("[lora] TX raw %s\n", hex);
+    }
     const bool ok = LoraRadio::transmit(f, (uint8_t)n, dbm);
     LoraRadio::standby();
     setMode(was);
@@ -1083,7 +1091,8 @@ bool sendText(Proto p, const char* name, const char* text, int8_t dbm, int16_t c
         const uint32_t stamp = Clock::trusted() ? Clock::nowEpoch() : 1790000000u;
         MeshCore::GroupText g;
         n = MeshCore::sealGroupText(ch, stamp, name, text, f, &g);
-        if (!n) return false;
+        n = MeshCore::scopeFlood(f, n, sizeof f, ch.scope[0] ? ch.scope : MeshCore::defaultScope());
+        if (!n || !MeshCore::setFloodHashSize(f, n, Settings::loraMcHashBytes())) return false;
         // What a relay's copy decodes to: the name, the text as it fitted, the stamp.
         key = Lora::Msgs::meshCoreKey(g.sender, g.text, g.timestamp);
     } else {
@@ -1242,6 +1251,8 @@ static void mcTick(uint32_t now) {
         const bool got = McDm::next(now, mcEpoch(), name, o);
         xSemaphoreGive(s_lock);
         if (!got) return;
+        o.len = MeshCore::scopeFlood(o.frame, o.len, sizeof o.frame, MeshCore::defaultScope());
+        if (!MeshCore::setFloodHashSize(o.frame, o.len, Settings::loraMcHashBytes())) o.len = 0;
         const bool ok = dbm && o.len && transmitOn(prof, o.frame, o.len, dbm);
         static const char* const JOB[] = { "-", "DM", "ACK", "PATH+ACK", "advert" };
         if (dbm) Serial.printf("[lora] MeshCore job %s (to %08lx, %u bytes): %s" "\n", (unsigned)o.job < 5 ? JOB[o.job] : "?",
@@ -2412,6 +2423,11 @@ bool console(const char* line) {
         char s[96];
         statusLine(s, sizeof s);
         Serial.printf("[lora] %s\n", s);
+        Serial.printf("[lora] MeshCore default scope: %s\n", MeshCore::defaultScope()[0] ? MeshCore::defaultScope() : "* (unscoped)");
+        for (uint8_t i = 0; i < MeshCore::channelCount(); ++i) {
+            const auto c = MeshCore::channel(i);
+            Serial.printf("[lora] MeshCore %s scope: %s\n", c.name, c.scope[0] ? c.scope : "(default)");
+        }
         Serial.printf("[lora] %lu frames, %lu crc errors, %lu header errors, %lu stray preambles; cad %lu rounds %lu hits; air %lu ms; noise %d dBm\n",
                       (unsigned long)s_stats.packets, (unsigned long)s_stats.crcErrors, (unsigned long)s_stats.headerErrors,
                       (unsigned long)s_stats.preambles, (unsigned long)s_stats.cadRounds, (unsigned long)s_stats.cadHits,

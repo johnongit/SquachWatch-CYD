@@ -411,6 +411,9 @@ namespace Settings {
     // OFF still catches, logs and counts. Key "loraAlrt".
     bool        loraAlerts();
     void        toggleLoraAlerts();
+    // MeshCore relay prefix width: 1 (legacy), 2 or 3 bytes. Key "loraMcHash".
+    uint8_t     loraMcHashBytes();
+    void        cycleLoraMcHashBytes();
     // HOPS: the hop limit (and hop start) on every Meshtastic frame this board
     // sends, texts and the NodeInfo. 1-7, 3 by default. Key "loraHops".
     uint8_t     loraHops();

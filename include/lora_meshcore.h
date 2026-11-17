@@ -26,13 +26,23 @@ struct Frame {
     uint8_t        route, type, version;
     bool           hasTransport;
     uint16_t       transport1, transport2;
-    uint8_t        hashSize;       // bytes per path entry, 1 or 2
+    uint8_t        hashSize;       // bytes per path entry, 1, 2 or 3
     uint8_t        hops;           // entries in the path
     const uint8_t* path;
     const uint8_t* payload;
     uint8_t        payloadLen;
 };
 bool parse(const uint8_t* d, uint8_t len, Frame& f);
+
+// Public hashtag scopes, as MeshCore TransportKeyStore derives them.
+const char* defaultScope();
+bool setDefaultScope(const char* name);
+bool setChannelScope(uint8_t i, const char* name);
+// Inserts four transport bytes into a flood; returns 0 on invalid input/capacity.
+uint16_t scopeFlood(uint8_t* frame, uint16_t len, size_t cap, const char* scope);
+
+// Select hash width on an originating (zero-hop) flood, without changing payload/scope.
+bool setFloodHashSize(uint8_t* frame, uint16_t len, uint8_t bytes);
 
 // ---- adverts ---------------------------------------------------------------
 enum NodeType : uint8_t { NODE_CHAT = 1, NODE_REPEATER = 2, NODE_ROOM = 3, NODE_SENSOR = 4 };
@@ -65,6 +75,7 @@ struct Channel {
     // will not try its key. The panel has no keyboard and cannot type a
     // channel name, so switching a known one off is the one useful thing a
     // finger can do to this list.
+    char    scope[31]; // empty: default; *: explicitly unscoped; #name: override
     bool    enabled;
 };
 // SHA256("#name")[:16]: a hashtag channel's key is its name.

@@ -1769,3 +1769,48 @@ item that still says open is still open.
 - AFuV: https://www.gesetze-im-internet.de/afuv_2005/
 - BNetzA Vfg. 91/2025: https://www.bundesnetzagentur.de/DE/Fachthemen/Telekommunikation/Frequenzen/Allgemeinzuteilungen/_DL/vfg91_2025.pdf
 - DARC 70 cm band plan (May 2025): https://www.darc.de/fileadmin/filemounts/referate/vus/bandplaene/UHF_Bandplan_70_cm_Mai_2025.pdf
+
+### MeshCore flood scopes (T-Deck Plus)
+
+In **LORA SETTINGS → MESHCORE FLOOD SCOPE → DEFAULT SCOPE**, enter a
+public region name including its `#` prefix (for example `#paris`), then
+press Enter. Names are case-sensitive, at most 30 printable characters,
+without spaces. Use the exact name configured on your repeaters. Empty
+or `*` sends without a scope. This controls flood forwarding, independently
+of the EU/US/AU radio band setting and channel encryption keys.
+
+In **CHANNELS**, each MeshCore channel (including Public) has a **FLOOD SCOPE**
+row: empty inherits the default, `#name` overrides it, and `*` explicitly
+sends unscoped even when a default exists. Changes apply to subsequent
+transmissions and are saved across reboots. The default also applies to
+outgoing MeshCore adverts, DMs and flood receipts. Receive decoding stays
+independent of the selected transmit scope. Existing channel stores restore
+with no scope configured. Only public hashtag scopes are supported.
+
+Wire format follows MeshCore `TransportKeyStore.cpp`: SHA256 of the exact
+region name truncated to 16 bytes, then HMAC-SHA256 over payload type and
+payload; the first two bytes form transport code 1 (reserved values adjusted),
+and transport code 2 is zero.
+
+### MeshCore routing width and heard-node list (T-Deck Plus)
+
+**LORA SETTINGS → MESHCORE ROUTING → PATH HASH SIZE** cycles through 1, 2
+and 3 bytes per repeater identifier. The setting is saved across reboots and
+applies to the next outgoing MeshCore group text, DM, advert or flood receipt.
+It is independent of the flood scope and Meshtastic hop limit. Existing
+settings default to one byte. Reception supports all three widths regardless
+of the transmit setting; the reserved fourth encoding is rejected. A receipt
+preserves the original incoming path inside its encrypted payload.
+
+Tap the node count in the LORA header, or open **CHATS → NODES**, to browse
+MeshCore nodes heard since boot. Nodes are grouped as discussion/companions,
+repeaters, room servers, sensors and other types, newest-heard first within
+each type. Swipe vertically, or use W/S, to scroll. The list shows up to the
+radio node table's 96 entries, including unidentified last-hop repeaters.
+
+Tap a row marked **DM >** to open a MeshCore private conversation. Opening
+it sends nothing; type a message and press Enter to send. The node's contact
+key must be retained by the existing MeshCore contact store; a node without
+one stays visible as **NO KEY**. A room server or repeater can be selected as
+a private recipient, but this does not implement room login, room posting or
+repeater administration protocols.

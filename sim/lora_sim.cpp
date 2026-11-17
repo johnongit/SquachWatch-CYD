@@ -218,6 +218,12 @@ Lora::Nodes::Node toNode(uint8_t i) {
     Lora::Nodes::Node n{};
     n.proto = w.proto;
     n.id = 0x3b1c9a00u + i * 0x111u;
+    if (w.proto == Lora::Proto::MESHCORE) {
+        const uint32_t peers[] = { 0x5e0a7f12, 0x6f1b8023, 0x702c9134, 0x813da245 };
+        n.id = ((uint64_t)peers[i - 4] << 32) | (0x11223344u + i);
+        n.role = (uint8_t)(1 + i - 4);
+        n.counter = 1;
+    }
     if (w.proto == Lora::Proto::MESHTASTIC) snprintf(n.tag, sizeof n.tag, "!%08x", (unsigned)n.id);
     else                                    snprintf(n.tag, sizeof n.tag, "%02X Rep", (unsigned)(0x40 + i));
     snprintf(n.name, sizeof n.name, "%s", w.name);

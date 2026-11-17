@@ -25,6 +25,10 @@
 #include "settings.h"
 #include "theme.h"
 #include "privacy.h"
+#include <stdlib.h>
+#if defined(ARDUINO_ARCH_ESP32)
+#include <esp_heap_caps.h>
+#endif
 #if defined(TDECK_PLUS) || SQUACH_LORA_FAKE
 #define LORACHAT_COMPOSE 1
 #include "ui_lorasettings.h"   // uiLoraMyName(): what MeshCore shows before the colon
@@ -104,7 +108,7 @@ const size_t CHIP_CHARS = 14;
 #endif
 
 uint16_t dmCol() { return Theme::VAPOR_YELLOW; }
-uint16_t tabCol(uint8_t t) { return t == 2 ? dmCol() : t ? Theme::PINK : Theme::CYAN; }
+uint16_t tabCol(uint8_t t) { return t == 3 ? Theme::GREEN : t == 2 ? dmCol() : t ? Theme::PINK : Theme::CYAN; }
 Lora::Proto tabProto(uint8_t t) { return t == 1 ? Lora::Proto::MESHCORE : Lora::Proto::MESHTASTIC; }
 
 uint32_t ringTotal() { return (uint32_t)Lora::msgCount() + Lora::msgDropped(); }
@@ -119,6 +123,95 @@ bool isDm(const Lora::Msgs::Msg& m) { return m.chan == Lora::Msgs::DM_CHAN; }
 // A conversation's name in its network's colour, so two networks in one
 // list stay told apart.
 uint16_t netCol(Lora::Proto p) { return p == Lora::Proto::MESHCORE ? Theme::PINK : Theme::CYAN; }
+
+void age(uint32_t now, uint32_t ms, char* out, size_t cap);
+
+#if LORACHAT_COMPOSE
+// The complete heard-node table stays in PSRAM. Only the visible rows are
+// hit targets, and they keep the peer they actually displayed.
+struct NodeList {
+    Lora::Nodes::Node nodes[Lora::Nodes::CAP];
+    uint8_t order[Lora::Nodes::CAP];
+    uint8_t count;
+    uint32_t at;
+};
+NodeList* s_nodes = nullptr;
+struct NodeHit { int top, bottom; uint32_t peer; bool canMessage; };
+NodeHit s_nodeHits[20];
+uint8_t s_nodeHitN = 0;
+uint8_t nodeRank(uint8_t role) {
+    return role == MeshCore::NODE_CHAT ? 0 : role == MeshCore::NODE_REPEATER ? 1 :
+           role == MeshCore::NODE_ROOM ? 2 : role == MeshCore::NODE_SENSOR ? 3 : 4;
+}
+const char* nodeSection(uint8_t rank) {
+    static const char* const names[] = { "DISCUSSION / COMPANIONS", "REPEATERS", "ROOM SERVERS", "SENSORS", "OTHER" };
+    return names[rank < 5 ? rank : 4];
+}
+void refreshNodes(uint32_t now) {
+    if (!s_nodes) {
+#if defined(ARDUINO_ARCH_ESP32)
+        s_nodes = (NodeList*)heap_caps_calloc(1, sizeof(NodeList), MALLOC_CAP_SPIRAM);
+#else
+        s_nodes = (NodeList*)calloc(1, sizeof(NodeList));
+#endif
+        if (!s_nodes) return;
+    } else if (now - s_nodes->at < 1000) return;
+    const uint8_t n = Lora::nodeSnapshot(s_nodes->nodes, Lora::Nodes::CAP);
+    s_nodes->at = now;
+    if (!n && Lora::nodeCount()) return; // a timed-out snapshot keeps the current list
+    s_nodes->count = 0;
+    for (uint8_t i = 0; i < n; ++i) {
+        if (s_nodes->nodes[i].proto != Lora::Proto::MESHCORE) continue;
+        uint8_t j = s_nodes->count++;
+        const uint8_t rank = nodeRank(s_nodes->nodes[i].role);
+        // Stable insertion: within a type, nodeSnapshot is newest-heard first.
+        while (j && nodeRank(s_nodes->nodes[s_nodes->order[j - 1]].role) > rank) {
+            s_nodes->order[j] = s_nodes->order[j - 1]; --j;
+        }
+        s_nodes->order[j] = i;
+    }
+    if (s_scroll >= s_nodes->count) s_scroll = s_nodes->count ? s_nodes->count - 1 : 0;
+}
+void drawNodes(TFT_eSPI& t, int y, int bottom, uint32_t now) {
+    s_nodeHitN = 0;
+    const uint16_t muted = Theme::blend(Theme::BG, Theme::WHITE, 150);
+    t.setTextFont(1); t.setTextSize(1);
+    t.setTextColor(muted, Theme::BG);
+    t.setCursor(6, y); t.print("MESHCORE: HEARD SINCE BOOT. SWIPE TO SCROLL"); y += 14;
+    if (!s_nodes || !s_nodes->count) {
+        t.setCursor(8, y + 8); t.print(s_nodes ? "NO MESHCORE NODES HEARD YET" : "NOT ENOUGH MEMORY TO OPEN NODES");
+    } else {
+        uint8_t last = 255;
+        for (uint8_t i = (uint8_t)s_scroll; i < s_nodes->count; ++i) {
+            const auto& n = s_nodes->nodes[s_nodes->order[i]];
+            const uint8_t rank = nodeRank(n.role);
+            const int sectionH = rank != last ? 14 : 0;
+            if (y + sectionH + 30 > bottom - 16) break;
+            if (sectionH) {
+                t.fillRect(4, y, t.width() - 8, 12, Theme::blend(Theme::BG, Theme::GREEN, 35));
+                t.setTextColor(Theme::GREEN, Theme::blend(Theme::BG, Theme::GREEN, 35));
+                t.setCursor(6, y + 2); t.print(nodeSection(rank)); y += 14; last = rank;
+            }
+            const uint32_t peer = (uint32_t)(n.id >> 32);
+            const bool canMessage = n.counter && peer && Lora::dmHasKey(Lora::Proto::MESHCORE, peer);
+            char name[40], pv[40];
+            snprintf(name, sizeof name, "%s", Privacy::name(n.name[0] ? n.name : n.tag, pv, sizeof pv));
+            while (name[0] && t.textWidth(name) > t.width() - 65) name[strlen(name) - 1] = '\0';
+            t.setTextColor(Theme::WHITE, Theme::BG); t.setCursor(8, y + 2); t.print(name);
+            t.setTextColor(canMessage ? Theme::PINK : muted, Theme::BG);
+            t.setCursor(t.width() - 46, y + 2); t.print(canMessage ? "DM >" : "NO KEY");
+            char ago[12], detail[56]; age(now, n.lastMs, ago, sizeof ago);
+            snprintf(detail, sizeof detail, "%s %s  %s", n.tag, n.directPackets ? "DIRECT" : "VIA", ago);
+            t.setTextColor(muted, Theme::BG); t.setCursor(8, y + 15); t.print(detail);
+            if (s_nodeHitN < 20) s_nodeHits[s_nodeHitN++] = NodeHit{y, y + 30, peer, canMessage};
+            y += 30;
+            t.drawFastHLine(6, y - 1, t.width() - 12, Theme::blend(Theme::BG, Theme::GREEN, 40));
+        }
+    }
+    t.setTextColor(Theme::VAPOR_YELLOW, Theme::BG); t.setCursor(6, bottom - 12);
+    t.print(s_status[0] && now - s_statusAt < 2500 ? s_status : "TAP A NODE TO OPEN A PRIVATE MESSAGE");
+}
+#endif
 
 // Walk the ring newest first, count every tab, and copy the open tab's
 // newest KEEP. Only when something changed -- or, in a conversation, every
@@ -330,7 +423,7 @@ void uiLoraChatInit(TFT_eSPI& t) {
 }
 
 void uiLoraChatSelect(uint8_t tab) {
-    if (tab > 2) tab = 2;
+    if (tab > (LORACHAT_COMPOSE ? 3 : 2)) tab = LORACHAT_COMPOSE ? 3 : 2;
     if (tab != s_tab) { s_tab = tab; s_scroll = 0; }
     if (tab != 2) s_peer = 0;
 }
@@ -352,6 +445,16 @@ uint16_t uiLoraChatDmUnread() {
 }
 
 void uiLoraChatScroll(int delta) {
+#if LORACHAT_COMPOSE
+    if (s_tab == 3) {
+        refreshNodes(millis());
+        s_scroll += delta;
+        const int last = s_nodes && s_nodes->count ? s_nodes->count - 1 : 0;
+        if (s_scroll > last) s_scroll = last;
+        if (s_scroll < 0) s_scroll = 0;
+        return;
+    }
+#endif
     s_scroll += delta;
     if (s_scroll > (int)s_rowN - 1) s_scroll = (int)s_rowN - 1;
     if (s_scroll < 0) s_scroll = 0;
@@ -373,8 +476,13 @@ void uiLoraChatTick(TFT_eSPI& t, uint32_t now) {
     const int w = t.width(), h = t.height();
     int bodyBottom = h - Theme::pinnedBackH(w) - 2;
 #if LORACHAT_COMPOSE
-    bodyBottom -= COMPOSE_H + 4;
-    drawCompose(t, w, bodyBottom + 2, now);
+    if (s_tab == 3) {
+        refreshNodes(now);
+        s_chipY = -100; s_chipW = 0;
+    } else {
+        bodyBottom -= COMPOSE_H + 4;
+        drawCompose(t, w, bodyBottom + 2, now);
+    }
 #endif
     t.fillRect(0, 0, w, bodyBottom, Theme::BG);
     s_rowsDrawn = 0; s_rowsFrom = (uint8_t)s_scroll; s_headY = -100;
@@ -382,18 +490,22 @@ void uiLoraChatTick(TFT_eSPI& t, uint32_t now) {
     // The three tabs, the open one filled. A narrow screen drops the counts,
     // then the long names.
     const int tabY = Theme::LIST_TOP;
-    const char* names[3] = { "MESHTASTIC", "MESHCORE", "DMs" };
-    const char* shortNames[3] = { "MESHT", "MCORE", "DMs" };
+    const uint8_t tabs = LORACHAT_COMPOSE ? 4 : 3;
+    const char* names[4] = { "MESHTASTIC", "MESHCORE", "DMs", "NODES" };
+    const char* shortNames[4] = { "MESHT", "MCORE", "DMs", "NODES" };
     t.setTextSize(1);
-    const int tw = (w - 8) / 3;
-    for (uint8_t i = 0; i < 3; i++) {
+    const int tw = (w - 8) / tabs;
+    for (uint8_t i = 0; i < tabs; i++) {
         const int x0 = 4 + i * tw + (i ? 2 : 0), x1 = 4 + (i + 1) * tw - 2;
         const bool on = (i == s_tab);
         const uint16_t col = tabCol(i);
         if (on) t.fillRoundRect(x0, tabY, x1 - x0, TAB_H, 4, col);
         else    t.drawRoundRect(x0, tabY, x1 - x0, TAB_H, 4, col);
         char lab[24];
-        const uint16_t cnt = i == 2 ? (s_dmUnread ? s_dmUnread : s_count[2]) : s_count[i];
+        uint16_t cnt = i == 2 ? (s_dmUnread ? s_dmUnread : s_count[2]) : i < 2 ? s_count[i] : 0;
+#if LORACHAT_COMPOSE
+        if (i == 3 && s_nodes) cnt = s_nodes->count;
+#endif
         snprintf(lab, sizeof lab, "%s %u", names[i], (unsigned)cnt);
         if (t.textWidth(lab) > x1 - x0 - 4) snprintf(lab, sizeof lab, "%s", names[i]);
         if (t.textWidth(lab) > x1 - x0 - 4) snprintf(lab, sizeof lab, "%s", shortNames[i]);
@@ -406,6 +518,9 @@ void uiLoraChatTick(TFT_eSPI& t, uint32_t now) {
     }
 
     int y = tabY + TAB_H + 4;
+#if LORACHAT_COMPOSE
+    if (s_tab == 3) { drawNodes(t, y, bodyBottom, now); Theme::drawPinnedBack(t, "[ BACK ]"); return; }
+#endif
     if (s_tab == 2 && s_peer) {
         // The conversation's header: the way back to the list, and whose it is.
         char nm[24], who[48];
@@ -492,6 +607,18 @@ void uiLoraChatTick(TFT_eSPI& t, uint32_t now) {
 
 bool uiLoraChatTap(int x, int y, uint32_t now) {
     (void)x; (void)now;
+#if LORACHAT_COMPOSE
+    if (s_tab == 3) {
+        for (uint8_t i = 0; i < s_nodeHitN; ++i) {
+            const auto hit = s_nodeHits[i];
+            if (y < hit.top || y >= hit.bottom) continue;
+            if (hit.canMessage && Lora::dmHasKey(Lora::Proto::MESHCORE, hit.peer)) uiLoraChatOpenDm(hit.peer, Lora::Proto::MESHCORE);
+            else { snprintf(s_status, sizeof s_status, "CONTACT KEY UNAVAILABLE"); s_statusAt = now; }
+            return true;
+        }
+        return false;
+    }
+#endif
     // "< ALL DMs": back to the list.
     if (s_tab == 2 && s_peer && y >= s_headY - 4 && y < s_headY + 12) { s_peer = 0; s_scroll = 0; s_sig = 0xFFFFFFFFu; return true; }
     for (uint8_t k = 0; k < s_rowsDrawn; k++) {
@@ -524,6 +651,11 @@ void uiLoraChatStepChannel(uint32_t now) {
 }
 
 void uiLoraChatKey(char c, uint32_t now) {
+    if (s_tab == 3) {
+        if (c == 'w' || c == 'W') uiLoraChatScroll(-1);
+        else if (c == 's' || c == 'S') uiLoraChatScroll(1);
+        return;
+    }
     if (c == '\b') { if (s_composeN) s_compose[--s_composeN] = '\0'; return; }
     if (c == '\n') {
         if (!s_composeN) return;
@@ -568,9 +700,10 @@ LoraChatHit uiLoraChatHit(TFT_eSPI& t, int x, int y) {
 #endif
     const int tabY = Theme::LIST_TOP;
     if (y < tabY || y > tabY + TAB_H + 4) return LoraChatHit::NONE;
-    const int tw = (t.width() - 8) / 3;
+    if (x < 4 || x >= t.width() - 4) return LoraChatHit::NONE;
+    const int tw = (t.width() - 8) / (LORACHAT_COMPOSE ? 4 : 3);
     const int k = (x - 4) / tw;
-    return k <= 0 ? LoraChatHit::TAB_MESHTASTIC : k == 1 ? LoraChatHit::TAB_MESHCORE : LoraChatHit::TAB_DMS;
+    return k <= 0 ? LoraChatHit::TAB_MESHTASTIC : k == 1 ? LoraChatHit::TAB_MESHCORE : k == 2 ? LoraChatHit::TAB_DMS : LoraChatHit::TAB_NODES;
 }
 
 #endif

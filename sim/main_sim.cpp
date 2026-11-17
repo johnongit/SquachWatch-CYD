@@ -1149,7 +1149,7 @@ int main(int argc, char** argv) {
         for (int g = 0; g < 3 && (Settings::loraTxDbm() != 0) != tx; g++) Settings::cycleLoraTx();
         SimLora::begin(lc);
         simLoraPick(lc.net);
-        uiLoraChatSelect(tabIdx == 2 ? 2 : lc.net);
+        uiLoraChatSelect(tabIdx >= 2 ? tabIdx : lc.net);
         // --tab 2: the DMs list; SQUACHSIM_DMPEER=3b1c9a00 opens that conversation.
         // SQUACHSIM_DMNET=1: that conversation is on MeshCore (4e0a7f12 is JERSEY DVL).
         if (const char* dp = getenv("SQUACHSIM_DMPEER"))
@@ -1371,6 +1371,7 @@ int main(int argc, char** argv) {
         else if (screen == "detfilter")  uiDetFilterScroll(1);
         else if (screen == "ignorelist") uiIgnoreListScroll(1);
         else if (screen == "lorasettings") uiLoraSettingsScrollBy(26);
+        else if (screen == "lorachat") uiLoraChatScroll(1);
         else                             uiSettingsScroll(1);
     }
 
@@ -1383,6 +1384,16 @@ int main(int argc, char** argv) {
     // Anything else is the background's.
     auto tapAt = [&](int x, int y, uint32_t when) {
         if (screen == "lorasettings") { uiLoraSettingsTap(x, y, when); return; }
+        if (screen == "lorachat") {
+            const auto hit = uiLoraChatHit(frame, x, y);
+            if (hit == LoraChatHit::TAB_MESHTASTIC) uiLoraChatSelect(0);
+            else if (hit == LoraChatHit::TAB_MESHCORE) uiLoraChatSelect(1);
+            else if (hit == LoraChatHit::TAB_DMS) uiLoraChatSelect(2);
+            else if (hit == LoraChatHit::TAB_NODES) uiLoraChatSelect(3);
+            else if (hit == LoraChatHit::CHANNEL) uiLoraChatStepChannel(when);
+            else uiLoraChatTap(x, y, when);
+            return;
+        }
         // The pet first, as on the board: a still tap is a grab and a let-go.
         if (Pet::clippyHit(x, y)) { Pet::clippyGrab(x, y, when); Pet::clippyRelease(when); }
         else if (Squachy::hitTest(x, y)) { Squachy::noteTapAt(x, y); Squachy::trigger(Squachy::Event::PETTED); }

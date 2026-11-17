@@ -22,11 +22,13 @@ namespace {
 // Bumped only if a record's shape changes. replay() refuses anything else
 // rather than reading the next byte as a kind and inventing channels from
 // whatever follows.
-const uint8_t FORMAT = 1;
+const uint8_t FORMAT = 2; // v2 adds scope records; v1 channel stores still load.
 
 enum Kind : uint8_t {
     KIND_MC_TAG = 1,   // MeshCore hashtag: the tag is stored, the key derived at boot
     KIND_MC_KEY = 2,   // MeshCore with a key handed over: 16 bytes follow the name
+    KIND_SCOPE_DEFAULT = 4,
+    KIND_SCOPE_CHANNEL = 5,
     KIND_MT     = 3,   // Meshtastic: a key-length byte then 0, 16 or 32 bytes
 };
 
@@ -85,6 +87,21 @@ size_t encode(uint8_t* out, size_t cap) {
         if (!c.derived) { memcpy(out + o, c.key, 16); o += 16; }
     }
 
+    const char* scope = MeshCore::defaultScope();
+    const size_t sl = strlen(scope);
+    if (sl && o + 3 + sl <= cap) {
+        out[o++] = KIND_SCOPE_DEFAULT; out[o++] = 0; out[o++] = sl;
+        memcpy(out + o, scope, sl); o += sl;
+    }
+    for (uint8_t i = 0; i < MeshCore::channelCount(); ++i) {
+        const auto c = MeshCore::channel(i);
+        const size_t nl = strlen(c.name), sl = strlen(c.scope);
+        if (!sl || o + 4 + nl + sl > cap) continue;
+        out[o++] = KIND_SCOPE_CHANNEL; out[o++] = 0; out[o++] = nl;
+        memcpy(out + o, c.name, nl); o += nl;
+        out[o++] = sl; memcpy(out + o, c.scope, sl); o += sl;
+    }
+
     const uint8_t mtFirst = (uint8_t)(Meshtastic::channelCount() - Meshtastic::userChannelCount());
     for (uint8_t i = mtFirst; i < Meshtastic::channelCount(); i++) {
         const Meshtastic::Channel c = Meshtastic::channel(i);
@@ -104,7 +121,9 @@ size_t encode(uint8_t* out, size_t cap) {
 }
 
 uint8_t replay(const uint8_t* rec, size_t n) {
-    if (!rec || n < 1 || rec[0] != FORMAT) return 0;
+    if (!rec || n < 1 || (rec[0] != FORMAT && rec[0] != 1)) return 0;
+    MeshCore::setDefaultScope("");
+    MeshCore::setChannelScope(0, "");
     MeshCore::clearUserChannels();
     Meshtastic::clearUserChannels();
     uint8_t got = 0;
@@ -113,9 +132,23 @@ uint8_t replay(const uint8_t* rec, size_t n) {
         const uint8_t kind = rec[o], flags = rec[o + 1], nl = rec[o + 2];
         o += 3;
         if (!nl || o + nl > n) break;
-        char name[24] = {0};
+        char name[31] = {0};
         memcpy(name, rec + o, nl < sizeof name - 1 ? nl : sizeof name - 1);
         o += nl;
+        if (kind == KIND_SCOPE_DEFAULT) {
+            if (nl <= 30) MeshCore::setDefaultScope(name);
+            continue;
+        }
+        if (kind == KIND_SCOPE_CHANNEL) {
+            if (o >= n) break;
+            const uint8_t sl = rec[o++];
+            if (sl > 30 || o + sl > n) break;
+            char scope[31] = {};
+            memcpy(scope, rec + o, sl); o += sl;
+            const int idx = MeshCore::findChannel(name);
+            if (idx >= 0) MeshCore::setChannelScope((uint8_t)idx, scope);
+            continue;
+        }
         bool ok = false;
         bool mc = true;
         if (kind == KIND_MC_TAG) {

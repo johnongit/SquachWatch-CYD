@@ -259,5 +259,47 @@ int main() {
         ck("signed exactly as Python's Ed25519 signs key | time | app data", !memcmp(d.adv.signature, sig, 64));
     }
 
+    suite("Region-scoped flood transport (independent Python HMAC vector)");
+    {
+        uint8_t f[256] = {0x15, 0, 0x11, 0x22, 0x33};
+        uint8_t orig[5]; memcpy(orig, f, 5);
+        ck("empty scope preserves legacy bytes", scopeFlood(f, 5, sizeof f, "") == 5 && !memcmp(f, orig, 5));
+        ck("wildcard explicitly unscoped", scopeFlood(f, 5, sizeof f, "*") == 5);
+        ck("reject private and malformed names", !setDefaultScope("paris") && !setDefaultScope("#bad name"));
+        ck("capacity failure leaves frame intact", !scopeFlood(f, 5, 8, "#paris") && !memcmp(f, orig, 5));
+        ck("scoped frame grows four bytes", scopeFlood(f, 5, sizeof f, "#paris") == 9);
+        Frame parsed;
+        ck("official HMAC code and reserved second code", parse(f, 9, parsed) && parsed.hasTransport && parsed.transport1 == 0x012b && parsed.transport2 == 0);
+        ck("payload preserved", parsed.payloadLen == 3 && !memcmp(parsed.payload, orig + 2, 3));
+        ck("already scoped frame untouched", scopeFlood(f, 9, sizeof f, "#other") == 9 && f[1] == 0x2b);
+        f[0] = 0x16; // direct route
+        ck("direct routing unchanged", scopeFlood(f, 9, sizeof f, "#paris") == 9 && f[0] == 0x16);
+    }
+    suite("One-, two- and three-byte routing, with and without scopes");
+    for (uint8_t width = 1; width <= 3; ++width) {
+        uint8_t f[256] = {0x15, 0, 0x11, 0x22, 0x33};
+        ck("originating flood selects width", setFloodHashSize(f, 5, width));
+        Frame parsed;
+        ck("unscoped width round-trips", parse(f, 5, parsed) && parsed.hashSize == width && !parsed.hops && parsed.payloadLen == 3);
+        uint16_t n = scopeFlood(f, 5, sizeof f, "#paris");
+        ck("scope and width coexist, scope does not hash path metadata", n == 9 && parse(f, n, parsed) && parsed.hashSize == width && parsed.transport1 == 0x012b);
+        ck("width can change after scoping", setFloodHashSize(f, n, width) && parse(f, n, parsed) && parsed.hashSize == width);
+        uint8_t path[6] = {0x12,0x34,0x56,0x78,0x9a,0xbc};
+        const uint8_t pay[] = {0xaa,0xbb};
+        frame(0x15, path, 2, width, pay, sizeof pay);
+        ck("relayed multi-byte paths decode", parse(pk.data, pk.len, parsed) && parsed.hashSize == width && parsed.hops == 2 && parsed.payload[0] == 0xaa);
+        ck("changing width on an existing route is refused", !setFloodHashSize(pk.data, pk.len, width));
+        uint8_t secret[32] = {}, ack[6] = {}, plain[192], pl = 0;
+        n = buildPathReturn(secret, 0x11, 0x22, (uint8_t)(((width - 1) << 6) | 2), path, ack, f);
+        PathReturn ret;
+        ck("receipt preserves incoming path width", parse(f, n, parsed) && openSecret(secret, parsed.payload + 2, parsed.payloadLen - 2, plain, pl) && parsePathReturn(plain, pl, ret) && ret.hashSize == width && ret.hops == 2 && !memcmp(ret.path, path, width * 2));
+    }
+    {
+        uint8_t f[256] = {0x15, 0xc0, 0x11}; Frame parsed;
+        ck("reserved fourth width refused", !parse(f, 3, parsed));
+        f[1] = 0;
+        ck("invalid outgoing width refused", !setFloodHashSize(f, 3, 0) && !setFloodHashSize(f, 3, 4));
+        ck("path bigger than 64 bytes refused", ({ uint8_t p[70] = {0x15, 0x96}; !parse(p, 70, parsed); }));
+    }
     return report();
 }

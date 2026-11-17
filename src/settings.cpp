@@ -231,6 +231,7 @@ static char     s_loraShort[Lora::MyName::SHORT_LEN + 1] = { 0 };
 static bool     s_loraAnnounce = true;
 static uint8_t  s_loraDetect   = 0;   // ON
 static bool     s_loraAlerts   = true;
+static uint8_t  s_loraMcHashBytes = 1;
 static uint8_t  s_loraHops     = 3;
 static bool     s_loraMsgSnd   = true;
 static char     s_loraMtPre[16] = { 0 };   // "" = LongFast
@@ -493,6 +494,11 @@ const char* loraDetectName() {
 }
 bool loraAlerts()       { return s_loraAlerts; }
 void toggleLoraAlerts() { s_loraAlerts = !s_loraAlerts; s_prefs.putBool("loraAlrt", s_loraAlerts); }
+uint8_t loraMcHashBytes() { return s_loraMcHashBytes; }
+void cycleLoraMcHashBytes() {
+    s_loraMcHashBytes = s_loraMcHashBytes >= 3 ? 1 : s_loraMcHashBytes + 1;
+    s_prefs.putUChar("loraMcHash", s_loraMcHashBytes);
+}
 uint8_t loraHops() { return s_loraHops; }
 void cycleLoraHops() { s_loraHops = (uint8_t)(s_loraHops >= 7 ? 1 : s_loraHops + 1); s_prefs.putUChar("loraHops", s_loraHops); }
 bool loraMsgSound()       { return s_loraMsgSnd; }
@@ -718,6 +724,8 @@ void load() {
     s_loraDetect   = s_prefs.getUChar("loraDet", 0);
     if (s_loraDetect > 2) s_loraDetect = 0;
     s_loraAlerts   = s_prefs.getBool("loraAlrt", true);
+    s_loraMcHashBytes = s_prefs.getUChar("loraMcHash", 1);
+    if (s_loraMcHashBytes < 1 || s_loraMcHashBytes > 3) s_loraMcHashBytes = 1;
     s_loraHops     = s_prefs.getUChar("loraHops", 3);
     if (s_loraHops < 1 || s_loraHops > 7) s_loraHops = 3;
     s_loraMsgSnd   = s_prefs.getBool("loraMsgSnd", true);
